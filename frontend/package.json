@@ -1,0 +1,32 @@
+{
+  "name": "stackkey-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@aztec/bb.js": "^3.0.0-nightly.20251104",
+    "@noble/curves": "^1.8.1",
+    "@noble/hashes": "^1.8.0",
+    "@noir-lang/acvm_js": "^1.0.0-beta.15",
+    "@noir-lang/noir_js": "^1.0.0-beta.15",
+    "@noir-lang/noir_wasm": "^1.0.0-beta.15",
+    "@noir-lang/noirc_abi": "^1.0.0-beta.15",
+    "@stacks/connect": "^8.2.6",
+    "@stacks/encryption": "^7.3.1",
+    "ethers": "^6.15.0",
+    "next": "15.3.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "typescript": "^5.8.3"
+  }
+}

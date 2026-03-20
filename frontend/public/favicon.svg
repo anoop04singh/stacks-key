@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="24" fill="#ff741f" />
+  <g transform="translate(10 8)">
+    <text
+      x="54"
+      y="78"
+      text-anchor="middle"
+      font-family="Space Grotesk, Segoe UI, sans-serif"
+      font-size="58"
+      font-weight="700"
+      fill="#ffd7c5"
+    >
+      sK
+    </text>
+    <text
+      x="48"
+      y="72"
+      text-anchor="middle"
+      font-family="Space Grotesk, Segoe UI, sans-serif"
+      font-size="58"
+      font-weight="700"
+      fill="#000000"
+    >
+      sK
+    </text>
+  </g>
+</svg>

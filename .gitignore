@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+frontend/.env.local
+frontend/.env*.local
+contracts/.env
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# TypeScript
+*.tsbuildinfo
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Hardhat / Solidity build output
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+contracts/coverage/
+contracts/coverage.json
+
+# Local app/runtime caches
+.appdata/
+.noir-probe/
+
+# Misc build caches
+.cache/
+tmp/
+temp/
