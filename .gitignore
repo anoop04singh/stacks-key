@@ -46,3 +46,7 @@ contracts/coverage.json
 .cache/
 tmp/
 temp/
+
+# Misc Files
+DEMO_TRANSCRIPT.md
+MEDIUM_ARTICLE.md
