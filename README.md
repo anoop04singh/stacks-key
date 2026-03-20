@@ -601,6 +601,29 @@ For demos, this is acceptable.
 
 For production, a dedicated prover service is a better architecture.
 
+### `@noir-lang/noir_wasm` note for Vercel
+
+The local version of `stacksKey` works correctly, including real Noir circuit compilation and proof generation. However, the current Vercel deployment may face runtime issues related to `@noir-lang/noir_wasm`.
+
+Why this happens:
+
+- `@noir-lang/noir_wasm` depends on WASM/runtime assets
+- Vercel serverless bundling can make those assets difficult to resolve correctly at runtime
+- the `/api/prove` route is the most affected because it compiles the Noir circuit and generates proofs inside the deployed function
+
+Current impact:
+
+- the app UI can still load normally
+- proof generation on the hosted deployment may fail because the Noir runtime assets are not always resolved consistently in the serverless environment
+
+Recommended production architecture:
+
+- host the frontend UI on Vercel
+- move proof generation to a dedicated Node.js prover service
+- call that prover service from the frontend or API layer
+
+This is the recommended path for production reliability and avoids serverless packaging issues around `@noir-lang/noir_wasm`.
+
 ---
 
 ## Using the Application
