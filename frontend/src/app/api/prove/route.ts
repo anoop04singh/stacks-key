@@ -94,7 +94,7 @@ async function loadArtifacts(): Promise<StackKeyArtifacts> {
     cachedArtifactsPromise = (async () => {
       const noirWasm = await importNoirWasmWebBundle();
       const fm = noirWasm.createFileManager("/");
-      const circuitRoot = join(process.cwd(), "..", "circuits", "stackkey_auth");
+      const circuitRoot = join(process.cwd(), "circuits", "stackkey_auth");
       const [nargoToml, mainSource] = await Promise.all([
         readFile(join(circuitRoot, "Nargo.toml"), "utf8"),
         readFile(join(circuitRoot, "src", "main.nr"), "utf8"),
