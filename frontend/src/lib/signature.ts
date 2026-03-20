@@ -5,10 +5,19 @@ import { bytesToHex } from "./message";
 const CURVE_ORDER = secp256k1.CURVE.n;
 const HALF_CURVE_ORDER = CURVE_ORDER >> 1n;
 
-function hexToBytes(hex: string): Uint8Array {
-  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+function canonicalHex(hex: string, label = "hex value"): string {
+  const clean = hex.trim().replace(/\s+/g, "");
+  const normalized = clean.startsWith("0x") || clean.startsWith("0X") ? clean.slice(2) : clean;
+  if (!/^[0-9a-fA-F]+$/.test(normalized)) {
+    throw new Error(`${label} must contain only hexadecimal characters`);
+  }
+  return normalized;
+}
+
+function hexToBytes(hex: string, label = "hex value"): Uint8Array {
+  const clean = canonicalHex(hex, label);
   if (clean.length % 2 !== 0) {
-    throw new Error("Invalid hex length");
+    throw new Error(`${label} must contain an even number of hexadecimal characters`);
   }
 
   const bytes = new Uint8Array(clean.length / 2);
@@ -37,7 +46,7 @@ function isDerSignature(bytes: Uint8Array): boolean {
 }
 
 function stripHexPrefix(hex: string): string {
-  return hex.startsWith("0x") ? hex.slice(2) : hex;
+  return canonicalHex(hex);
 }
 
 function parseSignature(signatureHex: string): {
@@ -98,11 +107,12 @@ export type ParsedStacksSignature = {
 
 export function parseStacksSig(signatureHex: string, publicKeyHex: string): ParsedStacksSignature {
   const parsedSignature = parseSignature(signatureHex);
-  const point = secp256k1.ProjectivePoint.fromHex(publicKeyHex);
+  const normalizedPublicKey = canonicalHex(publicKeyHex, "public key");
+  const point = secp256k1.ProjectivePoint.fromHex(normalizedPublicKey);
   const uncompressed = point.toRawBytes(false);
 
   return {
-    publicKey: publicKeyHex,
+    publicKey: `0x${normalizedPublicKey}`,
     pubkeyX: bytesToHex(uncompressed.slice(1, 33)),
     pubkeyY: bytesToHex(uncompressed.slice(33, 65)),
     sigR: bytesToHex(parsedSignature.r),
@@ -112,12 +122,13 @@ export function parseStacksSig(signatureHex: string, publicKeyHex: string): Pars
 }
 
 export function normalizePublicKeyHex(publicKeyHex: string): string {
-  return bytesToHex(secp256k1.ProjectivePoint.fromHex(publicKeyHex).toRawBytes(true));
+  const normalizedPublicKey = canonicalHex(publicKeyHex, "public key");
+  return bytesToHex(secp256k1.ProjectivePoint.fromHex(normalizedPublicKey).toRawBytes(true));
 }
 
 export function localVerify(signatureHex: string, publicKeyHex: string, messageHash: Uint8Array): boolean {
   const parsedSignature = parseSignature(signatureHex);
-  return secp256k1.verify(parsedSignature.compact, messageHash, hexToBytes(publicKeyHex), { lowS: false });
+  return secp256k1.verify(parsedSignature.compact, messageHash, hexToBytes(publicKeyHex, "public key"), { lowS: false });
 }
 
 export function localVerifyStacksMessage(signatureHex: string, publicKeyHex: string, message: string): boolean {

@@ -29,13 +29,14 @@ type LogItem = {
   ok?: boolean;
 };
 
-type WalletAddress = {
+type StacksAddressEntry = {
   address: string;
-  publicKey?: string;
+  publicKey: string;
+  symbol?: string;
 };
 
 type DeployState = {
-  metamaskAddress?: string;
+  relayerAddress?: string;
   accountDeployed: boolean;
   deploying: boolean;
   txHash?: string;
@@ -61,10 +62,6 @@ type ActionState = {
   txHash?: string;
   error?: string;
   proofSpent: boolean;
-};
-
-type MetaMaskProvider = {
-  request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
 };
 
 const phaseLabel: Record<Phase, string> = {
@@ -106,20 +103,24 @@ const defaultActionForm: ActionForm = {
   customValue: "",
 };
 
-function pickStacksPublicKey(addresses: WalletAddress[]): string | undefined {
-  return addresses.find((entry) => typeof entry.publicKey === "string" && /^(02|03)[0-9a-fA-F]{64}$/.test(entry.publicKey))
-    ?.publicKey;
-}
-
-async function connectWallet(): Promise<{ publicKey: string }> {
-  const { connect } = await import("@stacks/connect");
-  const response = (await connect()) as { addresses?: WalletAddress[] };
-  const publicKey = pickStacksPublicKey(response.addresses ?? []);
-  if (publicKey) {
-    return { publicKey };
+async function connectWallet(): Promise<{ address: string; publicKey: string }> {
+  const { request } = await import("@stacks/connect");
+  const response = (await request({ forceWalletSelect: true }, "stx_getAddresses")) as {
+    addresses?: StacksAddressEntry[];
+  };
+  const address = response.addresses?.find(
+    (entry) =>
+      entry.address.startsWith("S") &&
+      /^(02|03)[0-9a-fA-F]{64}$/.test(entry.publicKey)
+  );
+  if (address) {
+    return {
+      address: address.address,
+      publicKey: address.publicKey,
+    };
   }
 
-  throw new Error("Wallet connected but no compressed secp256k1 public key was returned.");
+  throw new Error("Wallet connected but no Stacks address with a compressed secp256k1 public key was returned.");
 }
 
 async function requestSignature(message: string, publicKey: string): Promise<{ signature: string; publicKey: string }> {
@@ -164,39 +165,6 @@ function getFactoryConfig() {
   }
 
   return { rpcUrl, factoryAddress, verifierAddress };
-}
-
-async function ensureMetaMaskSepolia(provider: MetaMaskProvider) {
-  const targetChainHex = `0x${SEPOLIA_CHAIN_ID.toString(16)}`;
-
-  try {
-    await provider.request({
-      method: "wallet_switchEthereumChain",
-      params: [{ chainId: targetChainHex }],
-    });
-  } catch (error) {
-    const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: number }).code : undefined;
-    if (code !== 4902) {
-      throw error;
-    }
-
-    await provider.request({
-      method: "wallet_addEthereumChain",
-      params: [
-        {
-          chainId: targetChainHex,
-          chainName: "Sepolia",
-          nativeCurrency: {
-            name: "Sepolia Ether",
-            symbol: "ETH",
-            decimals: 18,
-          },
-          rpcUrls: ["https://rpc.sepolia.org"],
-          blockExplorerUrls: ["https://sepolia.etherscan.io"],
-        },
-      ],
-    });
-  }
 }
 
 export default function HomePage() {
@@ -304,7 +272,8 @@ export default function HomePage() {
       const connectedPublicKey = normalizePublicKeyHex(connected.publicKey);
       setHasStacksSession(true);
       setStacksPublicKey(connectedPublicKey);
-      pushLog(`Wallet connected: ${connectedPublicKey.slice(0, 18)}...`, true);
+      pushLog(`Wallet connected: ${connected.address}`, true);
+      pushLog(`Stacks key selected: ${connectedPublicKey.slice(0, 18)}...`, true);
 
       setPhase("signing");
       const authMessage = buildAuthMessage(SEPOLIA_CHAIN_ID);
@@ -364,13 +333,21 @@ export default function HomePage() {
       setPhase("deploying");
       const { rpcUrl, factoryAddress, verifierAddress } = getFactoryConfig();
       const provider = new ethers.JsonRpcProvider(rpcUrl);
-      const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, provider) as ethers.Contract & {
-        getAddress: (salt: string, verifier: string) => Promise<string>;
-      };
-      const accountAddress = await factory.getAddress(
-        proveData.publicInputs[PUBLIC_INPUT_LAYOUT.saltOutput],
-        verifierAddress
-      );
+      const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, provider);
+      let accountAddress: string;
+      try {
+        accountAddress = await factory.getFunction("getAddress")(
+          proveData.publicInputs[PUBLIC_INPUT_LAYOUT.saltOutput],
+          verifierAddress
+        );
+      } catch (caught) {
+        if (caught instanceof Error && "code" in caught && (caught as { code?: string }).code === "CALL_EXCEPTION") {
+          throw new Error(
+            `Configured factory address ${factoryAddress} does not behave like StackKeyFactory.getAddress(bytes32,address). Check NEXT_PUBLIC_FACTORY_ADDRESS and make sure it is the deployed StackKeyFactory contract, not the verifier or a previously derived account.`
+          );
+        }
+        throw caught;
+      }
       pushLog(`Counterfactual account: ${accountAddress}`, true);
 
       setResult({
@@ -403,15 +380,10 @@ export default function HomePage() {
     }
   }
 
-  async function deployWithMetaMask() {
+  async function deployWithRelayer() {
     try {
       if (!result) {
         throw new Error("Generate the account proof before deploying.");
-      }
-
-      const injected = window.ethereum as MetaMaskProvider | undefined;
-      if (!injected) {
-        throw new Error("MetaMask was not detected in this browser.");
       }
 
       setDeployState((current) => ({
@@ -420,28 +392,36 @@ export default function HomePage() {
         error: undefined,
       }));
 
-      await ensureMetaMaskSepolia(injected);
-      const browserProvider = new ethers.BrowserProvider(injected);
-      const [selectedAddress] = (await browserProvider.send("eth_requestAccounts", [])) as string[];
-      const signer = await browserProvider.getSigner();
-      const { factoryAddress, verifierAddress } = getFactoryConfig();
-      const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, signer) as ethers.Contract & {
-        createAccount: (salt: string, verifier: string) => Promise<ethers.ContractTransactionResponse>;
+      const response = await fetch("/api/relay/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          salt: result.salt,
+          accountAddress: result.accountAddress,
+        }),
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        accountAddress?: string;
+        txHash?: string;
+        alreadyDeployed?: boolean;
+        relayerAddress?: string;
       };
-
-      const tx = await factory.createAccount(result.salt, verifierAddress);
-      pushLog(`Account deployment submitted: ${tx.hash}`, true);
-      const receipt = await tx.wait();
-      if (!receipt) {
-        throw new Error("Deployment transaction was not confirmed.");
+      if (!response.ok || !data.accountAddress) {
+        throw new Error(data.error ?? "Failed to relay account deployment");
       }
 
-      pushLog(`Account deployed on Sepolia: ${result.accountAddress}`, true);
+      if (data.alreadyDeployed) {
+        pushLog(`Account already deployed on Sepolia: ${data.accountAddress}`, true);
+      } else if (data.txHash) {
+        pushLog(`Relayed deployment submitted: ${data.txHash}`, true);
+        pushLog(`Account deployed on Sepolia: ${data.accountAddress}`, true);
+      }
       setDeployState({
-        metamaskAddress: selectedAddress,
+        relayerAddress: data.relayerAddress,
         accountDeployed: true,
         deploying: false,
-        txHash: tx.hash,
+        txHash: data.txHash,
       });
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "Failed to deploy smart account";
@@ -465,24 +445,10 @@ export default function HomePage() {
         throw new Error("This proof has already been used for an onchain action. Run the proof flow again to get a fresh nonce.");
       }
 
-      const injected = window.ethereum as MetaMaskProvider | undefined;
-      if (!injected) {
-        throw new Error("MetaMask was not detected in this browser.");
-      }
-
-      await ensureMetaMaskSepolia(injected);
-      const browserProvider = new ethers.BrowserProvider(injected);
-      const [selectedAddress] = (await browserProvider.send("eth_requestAccounts", [])) as string[];
-      const signer = await browserProvider.getSigner();
-
       setActionState((current) => ({
         ...current,
         submitting: true,
         error: undefined,
-      }));
-      setDeployState((current) => ({
-        ...current,
-        metamaskAddress: selectedAddress,
       }));
 
       let target: string;
@@ -508,28 +474,37 @@ export default function HomePage() {
         value = ethers.parseEther(actionForm.customValue || "0");
       }
 
-      const account = new ethers.Contract(result.accountAddress, ACCOUNT_ABI, signer) as ethers.Contract & {
-        executeWithProof: (
-          proof: string,
-          signals: string[],
-          target: string,
-          callData: string,
-          value: bigint
-        ) => Promise<ethers.ContractTransactionResponse>;
+      const response = await fetch("/api/relay/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountAddress: result.accountAddress,
+          proof: result.proof,
+          publicInputs: result.publicInputs,
+          target,
+          callData,
+          value: value.toString(),
+        }),
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        txHash?: string;
+        relayerAddress?: string;
       };
-
-      const tx = await account.executeWithProof(result.proof, result.publicInputs, target, callData, value);
-      pushLog(`Smart account action submitted: ${tx.hash}`, true);
-      const receipt = await tx.wait();
-      if (!receipt) {
-        throw new Error("Action transaction was not confirmed.");
+      if (!response.ok || !data.txHash) {
+        throw new Error(data.error ?? "Failed to relay smart-account action");
       }
 
+      pushLog(`Relayed smart account action submitted: ${data.txHash}`, true);
       pushLog(`Smart account executed call on ${target}`, true);
+      setDeployState((current) => ({
+        ...current,
+        relayerAddress: data.relayerAddress ?? current.relayerAddress,
+      }));
       setActionState({
         submitting: false,
         proofSpent: true,
-        txHash: tx.hash,
+        txHash: data.txHash,
       });
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "Failed to execute smart-account action";
@@ -556,7 +531,7 @@ export default function HomePage() {
           </h1>
           <p className="hero-text">
             Connect a Stacks wallet, sign one authentication message, generate a real zero-knowledge proof,
-            derive the Ethereum account bound to that key, deploy it on Sepolia with MetaMask, and demo transactions from it.
+            derive the Ethereum account bound to that key, deploy it on Sepolia through a relayer, and demo transactions from it.
           </p>
 
           <div className="hero-actions">
@@ -674,21 +649,20 @@ export default function HomePage() {
                 <div className="section-heading">
                   <div>
                     <p className="section-label">Deployment</p>
-                    <h2>Deploy with MetaMask</h2>
+                    <h2>Deploy through relayer</h2>
                   </div>
                 </div>
 
                 <p className="hero-text compact-text">
-                  Use MetaMask as the gas payer to deploy this smart account on Sepolia. MetaMask can help deploy
-                  and fund it, but it cannot import this contract account as a normal controllable account because it
-                  has no private key.
+                  stacksKey can deploy this smart account on Sepolia through your server-side relayer wallet. The relayer
+                  pays gas on behalf of the user, so no MetaMask connection is needed for deployment or demo actions.
                 </p>
 
                 <div className="result-stack deploy-stats">
                   <InfoCard label="Deployment status" value={deployState.accountDeployed ? "Deployed" : "Not deployed"} />
                   <InfoCard
-                    label="MetaMask wallet"
-                    value={deployState.metamaskAddress ? truncateMiddle(deployState.metamaskAddress, 8, 6) : "Not connected"}
+                    label="Relayer wallet"
+                    value={deployState.relayerAddress ? truncateMiddle(deployState.relayerAddress, 8, 6) : "Not used yet"}
                   />
                   <InfoCard label="Explorer" value={truncateMiddle(getExplorerAddressUrl(result.accountAddress), 20, 14)} />
                   <InfoCard label="Copyable address" value={result.accountAddress} />
@@ -698,11 +672,11 @@ export default function HomePage() {
                   <button
                     type="button"
                     className="primary-button"
-                    onClick={deployWithMetaMask}
+                    onClick={deployWithRelayer}
                     disabled={deployState.deploying || deployState.accountDeployed}
                   >
                     {deployState.deploying && <span className="button-spinner" aria-hidden="true" />}
-                    {deployState.accountDeployed ? "Account deployed" : "Deploy with MetaMask"}
+                    {deployState.accountDeployed ? "Account deployed" : "Deploy with relayer"}
                   </button>
                   <button
                     type="button"
@@ -735,6 +709,7 @@ export default function HomePage() {
                 <p className="hero-text compact-text">
                   These actions call <code>executeWithProof(...)</code> on the deployed account. Each proof is single-use
                   because the nonce is consumed onchain, so after one action you should run the proof flow again for a fresh demo.
+                  Gas is paid by the server-side relayer wallet.
                 </p>
 
                 <div className="mode-row">
